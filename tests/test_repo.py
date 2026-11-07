@@ -16,7 +16,7 @@ ORDER_PATH = ["trader-scanner", "trader-entry", "trader-exit", "trader-timemachi
               "trader-pelosi", "trader-risk", "trader-broker", "trader-alerts"]
 V1_ONLY = ["trader-copycat", "trader-screener", "trader-tax", "trader-rebalance"]
 # research tools at the root that are not skills (no SKILL.md, not on the path to an order)
-TOOLS = ["hl-backtest"]
+TOOLS = ["hl-backtest", "hl-testnet"]
 
 
 def frontmatter(path):

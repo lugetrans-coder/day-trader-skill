@@ -209,6 +209,10 @@ for the backtest, and `hl-backtest/auto_sol.py` runs both, pinned to the
 SOL perpetual on Hyperliquid: it collects data and simulates trades, it
 never sends an order. The rules are in `hl-backtest/README.md`.
 
+`hl-testnet/` is a separate process that trades the same rules on the
+Hyperliquid TESTNET only (test money, no mainnet switch), dry-run by
+default, with the official SDK. See `hl-testnet/README.md`.
+
 ```bash
 python3 hl-backtest/backtest.py run --data tests/fixtures/hl-backtest/SOL-1m-synthetic.json \
     --config hl-backtest/config.example.json --run A --run B --run A+B
@@ -230,6 +234,7 @@ trader-analyst/     SKILL.md, facts.py, metrics.example.json
 trader-pelosi/      SKILL.md, ptr.py
 hl-backtest/        backtest.py, collect.py, auto_sol.py, daily_report.py, windows/*.ps1, config.example.json,
                     README.md (research, not a skill)
+hl-testnet/         trader.py, requirements.txt, windows/*.ps1, README.md (testnet only, not a skill)
 tests/              unittest suite + offline fixtures
 ```
 

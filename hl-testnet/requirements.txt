@@ -1,0 +1,3 @@
+# hl-testnet/trader.py: the official Hyperliquid Python SDK (Python 3.9 or newer).
+# Pinned to the version this code was checked against.
+hyperliquid-python-sdk==0.24.0
