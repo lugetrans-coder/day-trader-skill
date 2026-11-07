@@ -140,6 +140,16 @@ class DayTradeChecks(unittest.TestCase):
     def one(self, order, now=NOW, **over):
         return check.check([order], cfg(**over), now=at(now))
 
+    def test_bare_crypto_bracket_blocked_stock_brackets_pass(self):
+        now = "2026-11-06 10:15"
+        for sym in ("SOL", "HYPE"):
+            r = self.one(bracket(sym, 1, 185, 180, 190), now=now)["results"][0]
+            self.assertEqual(r["verdict"], "BLOCK", sym)
+            self.assertIn("crypto symbol", " ".join(r["reasons"]))
+        for sym in ("TSLA", "BRK.B"):
+            r = self.one(bracket(sym, 1, 185, 180, 190), now=now)["results"][0]
+            self.assertEqual(r["verdict"], "PASS", (sym, r["reasons"]))
+
     def test_a_stop_is_required(self):
         o = tsla()
         for k in ("order_class", "take_profit_limit_price", "stop_loss_stop_price", "plan"):
@@ -393,6 +403,31 @@ class V1Checks(unittest.TestCase):
     def test_crypto_and_junk_symbols(self):
         crypto = {"symbol": "BTC/USD", "side": "buy", "notional": "50", "type": "market", "time_in_force": "day"}
         self.assertIn("stocks and ETFs only", " ".join(self.one(crypto)["reasons"]))
+
+    def test_bare_crypto_symbols_are_blocked(self):
+        for sym in ("SOL", "HYPE", "ETH", "BTC", "DOGE", "SOL-USD", "SOLUSD"):
+            r = self.one(buy(sym, 100))
+            self.assertEqual(r["verdict"], "BLOCK", sym)
+            self.assertTrue(any(x.startswith("asset:") for x in r["reasons"]), sym)
+        self.assertIn("crypto symbol", " ".join(self.one(buy("SOL", 100))["reasons"]))
+        # an exit is still checked for the asset
+        self.assertEqual(self.one({"symbol": "SOL", "side": "sell", "qty": "1", "type": "market",
+                                   "time_in_force": "day"})["verdict"], "BLOCK")
+
+    def test_stock_tickers_still_pass_the_asset_check(self):
+        for sym in ("KO", "AAPL", "TSLA", "BRK.B", "BF-B", "SPY", "LINK", "APT"):
+            r = self.one(buy(sym, 100))
+            self.assertFalse([x for x in r["reasons"] if x.startswith("asset:")], sym)
+
+    def test_allow_tickers_overrides_the_crypto_list(self):
+        r = self.one(buy("ETH", 100), allow_tickers=["eth"])
+        self.assertFalse([x for x in r["reasons"] if x.startswith("asset:")])
+
+    def test_asset_class_field(self):
+        r = self.one(dict(buy("KO", 100), asset_class="crypto"))
+        self.assertIn("asset_class crypto", " ".join(r["reasons"]))
+        r = self.one(dict(buy("KO", 100), asset_class="us_equity"))
+        self.assertFalse([x for x in r["reasons"] if x.startswith("asset:")])
 
     def test_format_rules(self):
         both = dict(buy("KO", 100), qty="1")

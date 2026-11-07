@@ -62,7 +62,7 @@ batch that is fine order by order but breaks a limit together is caught.
 | check | blocks when |
 | --- | --- |
 | format | no symbol, side not buy or sell, both or neither of qty and notional, a notional order that is not market + day (Alpaca's rule), a limit order with no limit price; a bracket that is not whole shares, not `day` or `gtc`, or misses its stop-loss or take-profit |
-| asset | an option symbol while `allow_options` is false; crypto or anything that is not a US stock or ETF ticker |
+| asset | an option symbol while `allow_options` is false; crypto, whether a pair (`BTC/USD`, `SOL-USD`) or a bare coin symbol (`SOL`, `ETH`, `BTC`, `HYPE`, ...); an `asset_class` other than `us_equity`; anything else that is not a US stock or ETF ticker. A bare coin symbol that is really a listed stock or ETF you mean to trade (Grayscale's `BTC` and `ETH` mini trusts) goes in `allow_tickers` |
 | short | a sell of more than you hold (`allow_short` false) |
 | blocked | (entries) the ticker is on the `blocked` list |
 | size | (entries) under `min_order_usd` or over `max_order_usd` |

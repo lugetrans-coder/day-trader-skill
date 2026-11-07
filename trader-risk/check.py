@@ -25,7 +25,10 @@ What blocks an order (every order):
                 a limit order without a limit price, unknown type; a bracket
                 that is not whole shares, not day / gtc, or misses a leg
   asset         options (OCC symbols) unless "allow_options": true; crypto
-                and anything that is not a stock or ETF
+                (BTC/USD, SOL-USD, or a bare coin symbol such as SOL, ETH,
+                BTC or HYPE, unless listed in "allow_tickers"); an order whose
+                asset_class is not us_equity; anything else that is not a
+                stock or ETF ticker
   short         selling more than you hold, unless "allow_short": true
 
 What blocks an entry (on top):
@@ -73,7 +76,7 @@ DEFAULTS = {
     "max_orders_per_day": 10, "min_reward_risk": 1.0, "require_stop": True,
     "no_entries_before": "09:45", "no_entries_after": "15:30", "flat_by": "15:55",
     "paper": True, "blocked": [], "allow_options": False, "allow_margin": False, "allow_short": False,
-    "pdt_guard": False,
+    "pdt_guard": False, "allow_tickers": [],
 }
 ALPACA_FIELDS = ("symbol", "side", "qty", "notional", "type", "time_in_force", "limit_price",
                  "stop_price", "trail_price", "trail_percent", "extended_hours", "client_order_id",
@@ -85,6 +88,17 @@ TYPES = {"market", "limit", "stop", "stop_limit", "trailing_stop"}
 TIFS = {"day", "gtc", "opg", "cls", "ioc", "fok"}
 OCC = re.compile(r"^[A-Z]{1,6}\d{6}[CP]\d{8}$")
 TICKER = re.compile(r"^[A-Z]{1,5}([.\-][A-Z]{1,2})?$")
+# Bare crypto base symbols that look like stock tickers. A symbol that is also
+# a listed US stock or ETF (LINK, APT, LTC, ATOM, SAND, NEAR, ...) is left out
+# on purpose. BTC and ETH are also Grayscale's mini-trust ETFs; a bare BTC or
+# ETH almost always means the coin, so they are blocked: list the ticker in
+# "allow_tickers" in the config to trade the ETF.
+CRYPTO = frozenset("""
+    BTC ETH SOL XRP DOGE ADA AVAX DOT TON SHIB XLM XMR ETC HBAR ICP FIL ARB TIA
+    INJ ONDO HYPE PEPE WIF BONK FLOKI TAO JUP PYTH AAVE UNI MKR LDO CRV ALGO XTZ
+    BNB TRUMP ENA WLD KAS IMX RUNE CRO OKB MNT QNT JASMY RNDR
+    USDT USDC USDE DAI WBTC STETH PAXG XAUT
+""".split())
 HHMM = re.compile(r"^([01]?\d|2[0-3]):([0-5]\d)$")
 CENT = 0.005
 FRESH_MINUTES = 15
@@ -473,7 +487,15 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
                          % (oc or "advanced_instructions"))
 
         # asset
-        if sym and OCC.match(sym.replace(" ", "")):
+        aclass = str(o.get("asset_class") or plan.get("asset_class") or "").strip().lower()
+        allowed = {str(t).strip().upper() for t in (c.get("allow_tickers") or [])}
+        if aclass and aclass not in ("us_equity", "us_option", "stock", "etf"):
+            reasons.append("asset: %s is marked asset_class %s; this pack trades stocks and ETFs only"
+                           % (sym or "the order", aclass))
+        elif aclass == "us_option" and not c.get("allow_options"):
+            reasons.append("asset: %s is an option contract; options are off "
+                           "(\"allow_options\": false)" % (sym or "the order"))
+        elif sym and OCC.match(sym.replace(" ", "")):
             if not c.get("allow_options"):
                 reasons.append("asset: %s is an option contract; options are off "
                                "(\"allow_options\": false)" % sym)
@@ -482,6 +504,10 @@ def check(orders, cfg, portfolio=None, prices=None, state=None, today=None, now=
         elif sym and ("/" in sym or not TICKER.match(sym)):
             reasons.append("asset: %s does not look like a US stock or ETF ticker; "
                            "this pack trades stocks and ETFs only" % sym)
+        elif sym and sym in CRYPTO and sym not in allowed:
+            reasons.append("asset: %s is a crypto symbol, not a US stock or ETF ticker; this pack trades "
+                           "stocks and ETFs only (if it is a listed stock or ETF, add it to "
+                           "\"allow_tickers\" in your config)" % sym)
 
         # the reference price: what one share costs to get in
         plan_entry = _f(plan.get("entry"))
