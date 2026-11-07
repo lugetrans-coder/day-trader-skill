@@ -84,7 +84,13 @@ def summary_text(res):
     w = lines.append
     w("Markt %s, Daten %s bis %s, %d abgeschlossene 1m-Kerzen, as_of %s"
       % (d["market_checked"], d["first"], d["last"], d["closed_candles"], d["as_of"]))
-    w("Datenlücken: %s" % (", ".join("%s (%d min)" % (g["from"], g["minutes"]) for g in d["gaps"]) or "keine"))
+    if d["gaps"]:
+        w("!! DATENLÜCKEN: %d (%d min): %s" % (len(d["gaps"]), sum(g["minutes"] for g in d["gaps"]),
+                                             ", ".join("%s (%d min)" % (g["from"], g["minutes"]) for g in d["gaps"])))
+    else:
+        w("Datenlücken: keine")
+    if r["signal"].get("stale"):
+        w("!! VERALTET: %s" % r["signal"]["reasons"][0])
     w("Konto %.2f $, Hebel %dx, Positionswert max %.2f %%, max %d offene SOL-Position, Lauf %s (beide Setups)"
       % (c["account_value_usd"], c["leverage"], c["position_pct"], c["max_positions"], r["name"]))
     for side in ("long", "short"):
@@ -103,34 +109,45 @@ def summary_text(res):
     return "\n".join(lines) + "\n"
 
 
-def run(db, work, account, config=None, post=None, out=print):
-    """The whole automated run. -> the backtest result dict. Raises AutoError on a failed step."""
+def run(db, work, account, config=None, post=None, out=print, collect_data=True, export=True, data_file=None,
+        allow_stale=False, now=None):
+    """The whole automated run. -> the backtest result dict (with res["auto"]: warnings, steps).
+    Raises AutoError on a failed step. allow_stale: a failed meta or fetch is a warning and the run goes on
+    with the stored data (the status then turns FLAT when the data is old). now: wall clock in UTC ms."""
     cfg = backtest.load_config(config, {"account_value_usd": account, "price_rule": "hyperliquid"})
     check_limits(cfg)
     db = collect.outside_checkout(db, "the database")
     work = os.path.dirname(collect.outside_checkout(os.path.join(work, "SOL-1m.json"), "the work folder"))
-    data_file = os.path.join(work, "SOL-1m.json")
+    data_file = data_file or os.path.join(work, "SOL-1m.json")
     rep_dir = os.path.join(work, "report")
+    now = collect.now_ms() if now is None else now
+    warnings = []
     out("SOL-Perps automatisch: nur %s, Daten sammeln und Trades simulieren (keine Orders)" % MARKET)
-    steps = [
-        ("collect.py", ["meta", "--db", db, "--coin", COIN]),
-        ("collect.py", ["fetch", "--db", db, "--coin", COIN]),
-        ("collect.py", ["export", "--db", db, "--coin", COIN, "--out", data_file]),
-    ]
+    steps = []
+    if collect_data:
+        steps += [("collect.py", ["meta", "--db", db, "--coin", COIN]),
+                  ("collect.py", ["fetch", "--db", db, "--coin", COIN])]
+    if export:
+        steps.append(("collect.py", ["export", "--db", db, "--coin", COIN, "--out", data_file]))
     for n, (tool, argv) in enumerate(steps, 1):
-        out("\n[%d/4] %s" % (n, shown(tool, argv)))
+        out("\n[%d/%d] %s" % (n, len(steps) + 1, shown(tool, argv)))
         buf_o, buf_e = io.StringIO(), io.StringIO()
         with contextlib.redirect_stdout(buf_o), contextlib.redirect_stderr(buf_e):
             code = collect.main(argv, post=post or collect.http_post)
         for line in (buf_o.getvalue() + buf_e.getvalue()).splitlines():
             out("      " + line)
         if code != 0:
-            raise AutoError("Schritt %d (%s) ist fehlgeschlagen: %s" % (n, argv[0], buf_e.getvalue().strip()))
+            why = "Schritt %d (%s) ist fehlgeschlagen: %s" % (n, argv[0], buf_e.getvalue().strip())
+            if allow_stale and argv[0] in ("meta", "fetch"):
+                warnings.append(why)
+                out("      WARNUNG: %s; weiter mit den gespeicherten Daten" % why)
+                continue
+            raise AutoError(why)
     argv = ["run", "--data", data_file, "--market", MARKET, "--price-rule", "hyperliquid",
-            "--account", repr(float(account)), "--run", RUN, "--out", rep_dir]
+            "--account", repr(float(account)), "--run", RUN, "--out", rep_dir, "--now", str(now)]
     if config:
         argv[1:1] = ["--config", config]
-    out("\n[4/4] %s" % shown("backtest.py", argv))
+    out("\n[%d/%d] %s" % (len(steps) + 1, len(steps) + 1, shown("backtest.py", argv)))
     buf_o, buf_e = io.StringIO(), io.StringIO()
     with contextlib.redirect_stdout(buf_o), contextlib.redirect_stderr(buf_e):
         code = backtest.main(argv)
@@ -139,6 +156,9 @@ def run(db, work, account, config=None, post=None, out=print):
     out("      Bericht: %s" % os.path.join(rep_dir, "report.txt"))
     with open(os.path.join(rep_dir, "report.json"), encoding="utf-8") as fh:
         res = json.load(fh)
+    res["auto"] = {"warnings": warnings, "now": now, "data_file": data_file, "report_dir": rep_dir}
+    for wn in warnings:
+        out("!! %s" % wn)
     out("\n" + summary_text(res).rstrip("\n"))
     return res
 

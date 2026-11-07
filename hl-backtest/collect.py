@@ -180,7 +180,7 @@ def call(post, payload, sleep=time.sleep, log=None):
 # ---------------------------------------------------------------- the store
 
 def connect(path):
-    db = sqlite3.connect(path)
+    db = sqlite3.connect(path, timeout=60)      # the hourly and the daily task may meet
     db.executescript(SCHEMA)
     return db
 

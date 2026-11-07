@@ -41,6 +41,35 @@ python3 hl-backtest/auto_sol.py --db ~/hl-data/sol.sqlite --work ~/hl-data/run -
    Exit code 0 when the run finished, 1 when a step failed (`ABBRUCH: ...`); a failed fetch stops
    the run before the backtest.
 
+## Windows: hourly candles, daily archived report
+
+`hl-backtest/windows/` holds two task scripts and a registration script (Windows PowerShell 5.1
+or PowerShell 7, Python 3.8+ as `py -3` or `python`, git on the PATH for the commit in the
+report name). Both tasks share one database: `%LOCALAPPDATA%\day-trader-skill\sol.sqlite`.
+
+| script | what |
+| --- | --- |
+| `collect_hourly.ps1` | `collect.py fetch --coin SOL`; log `logs\collect-YYYY-MM.log`; exit 1 on a failed fetch |
+| `daily_report.ps1` | `daily_report.py` with `250=regelwerk` and `1000=szenario`; log `logs\daily-YYYY-MM.log`; exit 0 clean, 2 data warning, 1 abort |
+| `register_tasks.ps1` | registers both under `\day-trader-skill\` for the current user (`-Unregister` removes them) |
+
+`daily_report.py` writes one folder per run, `reports\<YYYY-MM-DD>_<HHMM>Z_<commit>[-dirty]\`,
+never overwritten: `bericht.txt` (data state first, then LONG and SHORT per account with
+trades, gross and net), `run-info.json`, `SOL-1m.json.gz` (the candles both accounts used),
+and the full backtest reports per account. `reports\index.csv` (`;`-separated, UTF-8) gets
+one line per account and day. `reports\letzter-bericht.txt` is a copy of the newest report;
+`reports\ACHTUNG-DATENZUSTAND.txt` exists only while the newest run had a warning:
+
+- `VERALTET`: the newest candle closed more than 90 minutes ago, or today's fetch failed
+  (the report then runs on the stored data and the status is FLAT)
+- `DATENLÜCKEN`: missing minutes in the data
+- `ABRUFE`: failed fetches in the last 24 hours, or fewer than 20 successful ones
+  (expected during the first day after setting the tasks up)
+
+250 $ is the comparison for the current rule set (2 % = 5 $, under the 10 $ minimum, so its
+signals show up as `skipped_min_notional`); 1,000 $ is a separate simulation scenario. The
+scripts are ASCII only, because Windows PowerShell 5.1 reads a script without BOM as ANSI.
+
 ## Collect, export, backtest
 
 ```bash

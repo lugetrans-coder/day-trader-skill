@@ -228,7 +228,8 @@ trader-broker/      SKILL.md, ticket.py, claude_desktop_config.example.json
 trader-alerts/      SKILL.md, alerts.py, alerts.example.json
 trader-analyst/     SKILL.md, facts.py, metrics.example.json
 trader-pelosi/      SKILL.md, ptr.py
-hl-backtest/        backtest.py, collect.py, auto_sol.py, config.example.json, README.md (research, not a skill)
+hl-backtest/        backtest.py, collect.py, auto_sol.py, daily_report.py, windows/*.ps1, config.example.json,
+                    README.md (research, not a skill)
 tests/              unittest suite + offline fixtures
 ```
 

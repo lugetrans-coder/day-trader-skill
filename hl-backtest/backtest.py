@@ -753,7 +753,7 @@ def price_checks(data, cfg):
     return notes, {"price_low": lo, "price_high": hi, "rule_ticks": ticks}
 
 
-def backtest(data, cfg, runs=("A", "B")):
+def backtest(data, cfg, runs=("A", "B"), now=None):
     cycles, signals = scan(data, cfg)
     pnotes, pinfo = price_checks(data, cfg)
     result = {"tool": "hl-backtest", "version": VERSION, "simulated": True, "config": cfg,
@@ -779,11 +779,14 @@ def backtest(data, cfg, runs=("A", "B")):
         trades, skipped = run(data, cfg, signals, setups)
         result["runs"].append({"name": name, "setups": setups, "trades": trades, "skipped": skipped,
                                "summary": summarize(trades, skipped, setups),
-                               "signal": current_signal(data, cfg, signals, setups, trades)})
+                               "signal": current_signal(data, cfg, signals, setups, trades, now=now)})
     return result
 
 
-def current_signal(data, cfg, signals, setups, trades):
+STALE_GRACE_MS = 60000     # the entry candle may close up to a minute before the run notices
+
+
+def current_signal(data, cfg, signals, setups, trades, now=None):
     """LONG, SHORT or FLAT for the newest closed candle: a valid setup closes on it and the
     simulated entry would be the next candle's open. Simulated only, never an order."""
     by_t = data["by_t"]
@@ -800,6 +803,11 @@ def current_signal(data, cfg, signals, setups, trades):
     if data["as_of"] is None:
         out["reasons"].append("kein Datenstand as_of: es ist nicht sicher, dass die Kerze %s die letzte ist"
                               % hhmm(t_last))
+        return out
+    if now is not None and now >= entry_t + MINUTE_MS + STALE_GRACE_MS:
+        out["reasons"].append("veraltet: jetzt %s, die letzte Kerze in den Daten ist %s"
+                              % (stamp(now), stamp(t_last)))
+        out["stale"] = True
         return out
     if data["as_of"] >= entry_t + MINUTE_MS:
         out["reasons"].append("veraltet: die Kerze %s ist laut as_of %s schon geschlossen, fehlt aber"
@@ -1008,6 +1016,7 @@ def main(argv=None):
     p.add_argument("--as-of", help="UTC time the file was saved; later candles count as not closed")
     p.add_argument("--account", type=float, help="override account_value_usd")
     p.add_argument("--price-rule", choices=["fixed", "hyperliquid"], help="override price_rule")
+    p.add_argument("--now", help="wall clock for the status (UTC); data older than that is stale")
     p.add_argument("--market", help="stop unless the file is this market's data, e.g. hyperliquid:SOL-PERP")
     p.add_argument("--run", action="append", help="A, B or A+B (repeatable; default: A and B separately)")
     p.add_argument("--json", action="store_true", help="print the result as JSON")
@@ -1024,7 +1033,7 @@ def main(argv=None):
             check_market(data, a.market, cfg)
         else:
             data = read_data(a.data, symbol=cfg["symbol"], as_of=parse_as_of(a.as_of))
-        res = backtest(data, cfg, runs=a.run or ["A", "B"])
+        res = backtest(data, cfg, runs=a.run or ["A", "B"], now=parse_as_of(a.now))
     except BTError as e:
         print("backtest.py: %s" % e, file=sys.stderr)
         return 1
