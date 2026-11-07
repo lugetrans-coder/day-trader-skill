@@ -203,7 +203,9 @@ plugin, never on the path to an order. It replays two 1-minute range setups
 (a range breakout and a failed breakout back into the range, long and short)
 on a saved file of Hyperliquid SOL candles, with simulated taker fills, fees,
 spread and slippage shown apart, and gross and net P&L. No network, no
-broker, no key. The rules are in `hl-backtest/README.md`.
+broker, no key. A separate collector, `hl-backtest/collect.py`, stores
+public Hyperliquid candles in SQLite outside the checkout and exports them
+for the backtest. The rules are in `hl-backtest/README.md`.
 
 ```bash
 python3 hl-backtest/backtest.py run --data tests/fixtures/hl-backtest/SOL-1m-synthetic.json \
@@ -224,7 +226,7 @@ trader-broker/      SKILL.md, ticket.py, claude_desktop_config.example.json
 trader-alerts/      SKILL.md, alerts.py, alerts.example.json
 trader-analyst/     SKILL.md, facts.py, metrics.example.json
 trader-pelosi/      SKILL.md, ptr.py
-hl-backtest/        backtest.py, config.example.json, README.md (research, not a skill)
+hl-backtest/        backtest.py, collect.py, config.example.json, README.md (research, not a skill)
 tests/              unittest suite + offline fixtures
 ```
 

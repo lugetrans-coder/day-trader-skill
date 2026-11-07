@@ -1,9 +1,56 @@
 # hl-backtest: offline SOL-perps range backtest
 
 A research tool, not a skill: it has no `SKILL.md`, it is not part of the
-plugin, and it is not on the path to an order. It reads a saved file of
-Hyperliquid 1-minute candles and simulates every fill. No network, no broker
-connector, no API key, no orders. Python 3.8+, standard library only.
+plugin, and it is not on the path to an order. Two separate programs:
+
+- `collect.py` fetches PUBLIC market data (Hyperliquid's info endpoint, no
+  key, no account) into a SQLite file outside the git checkout and exports it.
+  It is the only file here that touches the network.
+- `backtest.py` reads the exported file and simulates every fill. No network,
+  no broker connector, no API key, no orders.
+
+Python 3.8+, standard library only.
+
+## Collect, export, backtest
+
+```bash
+export HL_BACKTEST_DB=~/hl-data/sol.sqlite          # outside the checkout (the tools refuse a path inside one)
+python3 hl-backtest/collect.py meta                  # szDecimals for SOL and the perps price rule
+python3 hl-backtest/collect.py fetch                 # closed 1m candles; run it again any time
+python3 hl-backtest/collect.py status                # range, gaps, the last fetches
+python3 hl-backtest/collect.py export --out ~/hl-data/SOL-1m.json
+python3 hl-backtest/backtest.py run --data ~/hl-data/SOL-1m.json --config hl-backtest/config.example.json \
+    --price-rule hyperliquid --account 1000 --run A --run B --run A+B
+```
+
+`fetch` (details in the docstring of `collect.py`):
+
+- `as_of` = now minus 2 s. Only candles with `t + 60 s <= as_of` are stored;
+  the candle still forming is dropped and counted.
+- The first run asks for the last 5000 minutes (all `candleSnapshot` serves).
+  Later runs start at the newest stored candle minus `--overlap-minutes` (10).
+- Candles are upserted on their open time: new, unchanged, or changed (the
+  newer values win, each change is listed). Overlapping runs never duplicate.
+- A full answer that does not cover the window is split and asked again on
+  both sides, so paging works whichever end the endpoint serves.
+- Every fetch is logged (`fetches` table). A failure prints `FEHLER: ...`
+  and exits 1; 429 and 5xx are retried 3 times. Gaps are listed after each
+  fetch; a store that fell more than 5000 minutes behind is flagged, because
+  that history can no longer be fetched from `candleSnapshot`.
+
+`export` writes the backtest's format with `as_of` (the newest successful
+fetch, UTC), the gaps, the logged failures, `exchange_meta` (szDecimals from
+`meta`) and the model notes.
+
+## Prices and sizes
+
+`meta` gives SOL `szDecimals` 2: sizes in steps of 0.01. Hyperliquid's
+documented perps price rule: at most 5 significant figures and at most
+6 - szDecimals decimals, integer prices always allowed. For SOL that is a
+tick of 0.001 from 10 to 99.999 and 0.01 from 100 to 999.99. Use
+`--price-rule hyperliquid` (or `"price_rule": "hyperliquid"`) on real data;
+the default `fixed` (tick 0.01) keeps the synthetic test numbers, and the
+report notes when a fixed tick does not match the rule at the file's prices.
 
 ```bash
 python3 hl-backtest/backtest.py run --data tests/fixtures/hl-backtest/SOL-1m-synthetic.json \
@@ -82,9 +129,10 @@ triggers stops on the mark price, so every stop is flagged as an approximation.
 on the fill value), half the spread (`half_spread_bps`) and slippage
 (`slippage_entry_bps`, `slippage_exit_bps`, `slippage_stop_bps` for stops
 and gap stops), each on the reference price, each charged once and reported
-on its own. `net = gross - fees - spread - slippage`, exactly. Gross is the
+on its own. Spread and slippage are model assumptions, not measured from
+order-book data. `net = gross - fees - spread - slippage`, exactly. Gross is the
 move between the reference prices (candle open, stop, target, close).
-Funding is not modelled; each trade says whether it crossed a full hour.
+Funding is not included; each trade says whether it crossed a full hour.
 
 **Size and limits.** 1x leverage. Position value = `position_pct` (2 %) of
 the account at the modelled entry fill; the quantity rounds down to

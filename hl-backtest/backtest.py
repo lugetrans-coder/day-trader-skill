@@ -44,7 +44,9 @@ One signal per setup, side and cycle; a skipped signal still uses it up.
 
 Entry: the signal candle closes at t+60 s; the entry is a simulated taker fill
   at the OPEN of the next candle E. Stop rounds away from the entry, the target
-  toward it, to tick_size.
+  toward it: to tick_size with price_rule "fixed", or with price_rule
+  "hyperliquid" to the documented perps rule (at most 5 significant figures
+  and at most 6 - sz_decimals decimals; integer prices always allowed).
 Exit, checked candle by candle on E, E+1, ..., E+hold_candles-1:
   open through the stop (long open <= stop, short open >= stop): gap stop at the open;
   open through the target: target at the open;
@@ -81,6 +83,8 @@ import os
 import sys
 
 MINUTE_MS = 60000
+PERP_MAX_DECIMALS = 6      # Hyperliquid perps: price decimals <= 6 - szDecimals
+PERP_SIG_FIGS = 5          # and at most 5 significant figures (integers always allowed)
 EPS = 1e-9
 VERSION = "0.1.0"
 
@@ -94,6 +98,7 @@ DEFAULTS = {
     "min_notional_usd": 10.0,
     "sz_decimals": 2,
     "tick_size": 0.01,
+    "price_rule": "fixed",
     "taker_fee_bps": 4.5,
     "half_spread_bps": 1.0,
     "slippage_entry_bps": 1.0,
@@ -202,6 +207,10 @@ def check_config(cfg):
         raise BTError("max_positions must be at least 1")
     if c["tick_size"] <= 0 or c["sz_decimals"] < 0:
         raise BTError("tick_size must be above 0 and sz_decimals at least 0")
+    if c["price_rule"] not in ("fixed", "hyperliquid"):
+        raise BTError("price_rule is fixed or hyperliquid, got %r" % c["price_rule"])
+    if c["price_rule"] == "hyperliquid" and c["sz_decimals"] > PERP_MAX_DECIMALS:
+        raise BTError("sz_decimals above %d leaves no price decimals" % PERP_MAX_DECIMALS)
     for k in ("taker_fee_bps", "half_spread_bps", "slippage_entry_bps", "slippage_exit_bps",
               "slippage_stop_bps", "min_notional_usd", "width_min_cost_mult"):
         if c[k] < 0:
@@ -308,7 +317,8 @@ def parse_candles(doc, symbol=None, as_of=None):
     for a, b in zip(ts, ts[1:]):
         if b - a > MINUTE_MS:
             gaps.append({"from": a + MINUTE_MS, "minutes": (b - a) // MINUTE_MS - 1})
-    return {"by_t": by_t, "first": ts[0], "last": ts[-1], "end": ts[-1] + MINUTE_MS, "count": len(ts),
+    em = meta.get("exchange_meta") if isinstance(meta.get("exchange_meta"), dict) else None
+    return {"exchange_meta": em, "by_t": by_t, "first": ts[0], "last": ts[-1], "end": ts[-1] + MINUTE_MS, "count": len(ts),
             "duplicates": dup, "open_dropped": open_dropped, "as_of": as_of, "gaps": gaps, "notes": notes,
             "symbol": (sorted(syms)[0] if syms else (symbol or "").upper())}
 
@@ -333,6 +343,33 @@ def read_data(path, symbol=None, as_of=None):
 
 
 # ---------------------------------------------------------------- rounding
+
+def hl_price_decimals(px, sz_decimals):
+    """Decimals a Hyperliquid perps price may carry at this price level."""
+    if px <= 0:
+        raise BTError("a price must be above 0")
+    int_digits = int(math.floor(math.log10(px) + EPS)) + 1
+    return max(0, min(PERP_MAX_DECIMALS - sz_decimals, PERP_SIG_FIGS - int_digits))
+
+
+def hl_tick(px, sz_decimals):
+    return 10.0 ** -hl_price_decimals(px, sz_decimals)
+
+
+def round_price(x, cfg, mode):
+    """Round a stop or target the way the config says (floor or ceil)."""
+    if cfg.get("price_rule") == "hyperliquid":
+        tick = hl_tick(x, cfg["sz_decimals"])
+        y = to_tick(x, tick, mode)
+        if hl_price_decimals(y, cfg["sz_decimals"]) < hl_price_decimals(x, cfg["sz_decimals"]):
+            y = to_tick(y, hl_tick(y, cfg["sz_decimals"]), mode)   # crossed a power of ten
+        return y
+    return to_tick(x, cfg["tick_size"], mode)
+
+
+def price_step(x, cfg):
+    return hl_tick(x, cfg["sz_decimals"]) if cfg.get("price_rule") == "hyperliquid" else cfg["tick_size"]
+
 
 def to_tick(x, tick, mode):
     n = x / tick
@@ -427,9 +464,9 @@ def scan_cycle(T, data, cfg):
             if a is not None:
                 a["ext"] = max(a["ext"], b["h"]) if side == "short" else min(a["ext"], b["l"])
                 if RL < b["c"] < RH and j - a["j"] <= K:
-                    tick = cfg["tick_size"]
-                    stop = to_tick(a["ext"] + tick, tick, "ceil") if side == "short" \
-                        else to_tick(a["ext"] - tick, tick, "floor")
+                    tick = price_step(a["ext"], cfg)
+                    stop = round_price(a["ext"] + tick, cfg, "ceil") if side == "short" \
+                        else round_price(a["ext"] - tick, cfg, "floor")
                     emit("B", side, stop=stop, breakout_t=a["t"], extreme=a["ext"])
                     att[side] = None
                     continue
@@ -506,21 +543,20 @@ def manage(side, entry_t, stop, target, data, cfg):
 
 def levels(sig, entry_ref, cfg):
     """(stop, target, risk, reward) or a skip reason."""
-    tick = cfg["tick_size"]
     long_ = sig["side"] == "long"
     if sig["setup"] == "A":
-        stop = to_tick(sig["RM"], tick, "floor" if long_ else "ceil")
+        stop = round_price(sig["RM"], cfg, "floor" if long_ else "ceil")
         risk = entry_ref - stop if long_ else stop - entry_ref
         if risk <= EPS:
             return None, ("skipped_invalid_risk", "Entry %.4f liegt nicht jenseits des Stops %.4f" % (entry_ref, stop))
         raw = entry_ref + cfg["target_r"] * risk if long_ else entry_ref - cfg["target_r"] * risk
-        target = to_tick(raw, tick, "floor" if long_ else "ceil")
+        target = round_price(raw, cfg, "floor" if long_ else "ceil")
     else:
         stop = sig["stop"]
         risk = entry_ref - stop if long_ else stop - entry_ref
         if risk <= EPS:
             return None, ("skipped_invalid_risk", "Entry %.4f liegt nicht jenseits des Stops %.4f" % (entry_ref, stop))
-        target = to_tick(sig["RM"], tick, "floor" if long_ else "ceil")
+        target = round_price(sig["RM"], cfg, "floor" if long_ else "ceil")
     reward = target - entry_ref if long_ else entry_ref - target
     if reward <= EPS:
         return None, ("skipped_rr", "Ziel %.4f liegt nicht vor dem Entry %.4f" % (target, entry_ref))
@@ -647,8 +683,29 @@ def summarize(trades, skipped, setups):
     return out
 
 
+def price_checks(data, cfg):
+    """Notes: the config against the file's exchange meta and the documented perps price rule."""
+    notes = []
+    em = data.get("exchange_meta") or {}
+    sz = em.get("szDecimals")
+    if sz is not None and int(sz) != cfg["sz_decimals"]:
+        notes.append("sz_decimals %d in der Konfiguration, aber szDecimals %s laut Börsen-Meta der Datei"
+                     % (cfg["sz_decimals"], sz))
+    lo = min(b["l"] for b in data["by_t"].values())
+    hi = max(b["h"] for b in data["by_t"].values())
+    ticks = sorted({hl_tick(lo, cfg["sz_decimals"]), hl_tick(hi, cfg["sz_decimals"])})
+    if cfg["price_rule"] == "fixed":
+        bad = [t for t in ticks if abs(t - cfg["tick_size"]) > EPS]
+        if bad:
+            notes.append("tick_size %g passt nicht zur Perps-Preisregel bei Preisen %.4f bis %.4f (Regel-Tick %s); "
+                         "price_rule \"hyperliquid\" verwenden" % (cfg["tick_size"], lo, hi,
+                                                                    " / ".join("%g" % t for t in ticks)))
+    return notes, {"price_low": lo, "price_high": hi, "rule_ticks": ticks}
+
+
 def backtest(data, cfg, runs=("A", "B")):
     cycles, signals = scan(data, cfg)
+    pnotes, pinfo = price_checks(data, cfg)
     result = {"tool": "hl-backtest", "version": VERSION, "simulated": True, "config": cfg,
               "data": {"path": data.get("path"), "sha256": data.get("sha256"), "symbol": data["symbol"],
                        "closed_candles": data["count"], "first": stamp(data["first"]), "last": stamp(data["last"]),
@@ -656,7 +713,15 @@ def backtest(data, cfg, runs=("A", "B")):
                        "open_candles_dropped": [stamp(t) for t in data["open_dropped"]],
                        "duplicates_dropped": data["duplicates"],
                        "gaps": [{"from": stamp(g["from"]), "minutes": g["minutes"]} for g in data["gaps"]],
-                       "notes": data["notes"]},
+                       "exchange_meta": data.get("exchange_meta"),
+                       "price_rule_check": pinfo,
+                       "notes": data["notes"] + pnotes},
+              "model_assumptions": {
+                  "fills": "alle Fills simuliert, Taker",
+                  "spread": "Modellannahme: half_spread_bps je Seite, nicht aus Orderbuchdaten",
+                  "slippage": "Modellannahme: slippage_*_bps, nicht aus Orderbuchdaten",
+                  "funding": "nicht eingerechnet",
+                  "stop_trigger": "Handelskerzen als Näherung für den Mark-Preis"},
               "cycles": cycles, "signals": len(signals), "runs": []}
     for name in runs:
         setups = parse_run(name)
@@ -698,13 +763,21 @@ def report(res):
       "Exit spätestens am Close der %d. Kerze ab Entry\n"
       % (cfg["cycle_anchor_utc"], cfg["cycle_minutes"], cfg["range_minutes"], cfg["signal_minutes"],
          cfg["range_minutes"] + cfg["signal_minutes"], cfg["hold_candles"]))
-    w("Kosten je Seite (Taker): Gebühr %.2f bp, halber Spread %.2f bp, Slippage Entry %.2f / Exit %.2f / Stop %.2f bp\n"
+    w("Kosten je Seite (Taker): Gebühr %.2f bp; Modellannahmen: halber Spread %.2f bp, Slippage Entry %.2f / "
+      "Exit %.2f / Stop %.2f bp. Funding nicht eingerechnet.\n"
       % (cfg["taker_fee_bps"], cfg["half_spread_bps"], cfg["slippage_entry_bps"], cfg["slippage_exit_bps"],
          cfg["slippage_stop_bps"]))
     w("Konto %.2f $, Hebel %dx, Positionswert max %.2f %% (%.2f $), Menge abgerundet auf %d Stellen, "
       "Mindestorderwert %.2f $, max %d offene Position(en), Exposure max %.2f %%\n"
       % (K, cfg["leverage"], cfg["position_pct"], K * cfg["position_pct"] / 100, cfg["sz_decimals"],
          cfg["min_notional_usd"], cfg["max_positions"], cfg["max_exposure_pct"]))
+    if cfg["price_rule"] == "hyperliquid":
+        w("Preisrundung: Perps-Regel von Hyperliquid (max. %d signifikante Stellen, max. %d - %d = %d Nachkommastellen)\n"
+          % (PERP_SIG_FIGS, PERP_MAX_DECIMALS, cfg["sz_decimals"], PERP_MAX_DECIMALS - cfg["sz_decimals"]))
+    else:
+        w("Preisrundung: fester Tick %g\n" % cfg["tick_size"])
+    if d.get("exchange_meta"):
+        w("Börsen-Meta aus der Datei: %s\n" % ", ".join("%s %s" % kv for kv in sorted(d["exchange_meta"].items())))
     st = {}
     for c in res["cycles"]:
         st[c["status"]] = st.get(c["status"], 0) + 1
@@ -802,6 +875,7 @@ def main(argv=None):
     p.add_argument("--config", help="JSON with any of the defaults (see config.example.json)")
     p.add_argument("--as-of", help="UTC time the file was saved; later candles count as not closed")
     p.add_argument("--account", type=float, help="override account_value_usd")
+    p.add_argument("--price-rule", choices=["fixed", "hyperliquid"], help="override price_rule")
     p.add_argument("--run", action="append", help="A, B or A+B (repeatable; default: A and B separately)")
     p.add_argument("--json", action="store_true", help="print the result as JSON")
     p.add_argument("--out", metavar="DIR", help="also write report.txt, report.json, trades.csv, skipped.csv")
@@ -810,7 +884,7 @@ def main(argv=None):
         ap.print_help()
         return 2
     try:
-        cfg = load_config(a.config, {"account_value_usd": a.account})
+        cfg = load_config(a.config, {"account_value_usd": a.account, "price_rule": a.price_rule})
         data = read_data(a.data, symbol=cfg["symbol"], as_of=parse_as_of(a.as_of))
         res = backtest(data, cfg, runs=a.run or ["A", "B"])
     except BTError as e:

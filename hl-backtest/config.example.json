@@ -9,6 +9,7 @@
   "min_notional_usd": 10.0,
   "sz_decimals": 2,
   "tick_size": 0.01,
+  "price_rule": "fixed",
   "taker_fee_bps": 4.5,
   "half_spread_bps": 1.0,
   "slippage_entry_bps": 1.0,
