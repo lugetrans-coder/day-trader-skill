@@ -9,7 +9,37 @@ plugin, and it is not on the path to an order. Two separate programs:
 - `backtest.py` reads the exported file and simulates every fill. No network,
   no broker connector, no API key, no orders.
 
+- `auto_sol.py` is the automated run, pinned to one market: the SOL
+  perpetual on Hyperliquid. It collects data and simulates trades, nothing else.
+
 Python 3.8+, standard library only.
+
+## The automated SOL run
+
+```bash
+python3 hl-backtest/auto_sol.py --db ~/hl-data/sol.sqlite --work ~/hl-data/run --account 1000
+```
+
+1. Checks the limits first: leverage 1, `position_pct` at most 2, `max_positions` 1, symbol SOL.
+2. `collect.py meta --coin SOL`, `fetch --coin SOL`, `export --coin SOL`, each printed as a command.
+   The collector takes main-dex perps coins only (no spot `@N` or `BASE/QUOTE`, no `dex:COIN`),
+   and the export names the market: `"venue": "hyperliquid"`, `"market_type": "perp"`, `"market": "SOL-PERP"`.
+3. `backtest.py run --market hyperliquid:SOL-PERP --price-rule hyperliquid --run A+B`. The market
+   check stops the run with `Eingabedaten gehören nicht zum Markt hyperliquid:SOL-PERP: ...` on any
+   other venue, market type, file symbol or candle symbol, and on candles without a symbol.
+   A+B evaluates both setups, LONG and SHORT, on closed 1m candles in one ledger: at most one open
+   SOL position.
+4. The summary: LONG and SHORT apart (trades, gross, net, and per setup), skipped signals by reason,
+   and the **status** on the newest closed candle:
+   - `LONG` / `SHORT`: a setup closed on that candle and passes the checks (reward:risk, a free
+     position, the minimum order value). The simulated entry would be the next candle's open; the
+     report estimates it with the last close and shows stop, target, size, position value and the
+     estimated loss at the stop.
+   - `FLAT` in every other case, with the reason: no setup on that candle, a skip, a simulated
+     position still open, conflicting LONG and SHORT, data without `as_of`, or stale data (the next
+     candle should already be closed).
+   Exit code 0 when the run finished, 1 when a step failed (`ABBRUCH: ...`); a failed fetch stops
+   the run before the backtest.
 
 ## Collect, export, backtest
 
@@ -20,7 +50,7 @@ python3 hl-backtest/collect.py fetch                 # closed 1m candles; run it
 python3 hl-backtest/collect.py status                # range, gaps, the last fetches
 python3 hl-backtest/collect.py export --out ~/hl-data/SOL-1m.json
 python3 hl-backtest/backtest.py run --data ~/hl-data/SOL-1m.json --config hl-backtest/config.example.json \
-    --price-rule hyperliquid --account 1000 --run A --run B --run A+B
+    --price-rule hyperliquid --market hyperliquid:SOL-PERP --account 1000 --run A --run B --run A+B
 ```
 
 `fetch` (details in the docstring of `collect.py`):

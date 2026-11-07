@@ -197,7 +197,12 @@ class Numbers(unittest.TestCase):
 
     def test_long_and_short_reported_apart(self):
         rows = {(r["setup"], r["side"]): r for r in by_run(self.res, "A+B")["summary"]}
-        self.assertEqual(set(rows), {("A", "long"), ("A", "short"), ("B", "long"), ("B", "short"), ("*", "*")})
+        self.assertEqual(set(rows), {("A", "long"), ("A", "short"), ("B", "long"), ("B", "short"),
+                                     ("*", "long"), ("*", "short"), ("*", "*")})
+        for side in ("long", "short"):
+            self.assertEqual(rows[("*", side)]["trades"], rows[("A", side)]["trades"] + rows[("B", side)]["trades"])
+            for k in ("gross", "net"):
+                self.assertAlmostEqual(rows[("*", side)][k], rows[("A", side)][k] + rows[("B", side)][k], places=5)
         self.assertEqual((rows[("A", "long")]["trades"], rows[("A", "short")]["trades"]), (6, 3))
         for k in ("gross", "fees", "spread", "slippage", "net"):
             self.assertAlmostEqual(rows[("*", "*")][k], rows[("A", "long")][k] + rows[("A", "short")][k], places=5)

@@ -45,6 +45,8 @@ import urllib.error
 import urllib.request
 
 INFO_URL = "https://api.hyperliquid.xyz/info"
+VENUE = "hyperliquid"
+MARKET_TYPE = "perp"
 MINUTE_MS = 60000
 SERVED = 5000              # candleSnapshot serves the 5000 most recent candles
 MAX_PAGES = 20
@@ -136,6 +138,15 @@ def price_decimals(px, sz_decimals):
 
 
 # ---------------------------------------------------------------- the info endpoint
+
+def perp_coin(coin):
+    """A main-dex perps coin name like SOL. Spot names (@107, PURR/USDC) and builder dexes (dex:COIN) are refused."""
+    c = str(coin or "").strip().upper()
+    if not c or not c.isalnum() or len(c) > 15:
+        raise CollectError("--coin %r is not a Hyperliquid perps coin: only names like SOL "
+                           "(no spot @N or BASE/QUOTE, no dex:COIN)" % coin)
+    return c
+
 
 def http_post(payload, timeout=20):
     """POST JSON to the public info endpoint. Uses HTTPS_PROXY and the system CA store."""
@@ -354,15 +365,18 @@ def export(db, coin="SOL", interval="1m", start=None, end=None):
                         (coin, interval)).fetchone()[0]
     gaps = find_gaps(db, coin, interval, start, end)
     meta = read_meta(db, coin)
+    if meta is None:
+        raise CollectError("no meta for %s in the store: run meta first, so the export can show the coin is "
+                           "in the perps universe" % coin)
     doc = {"source": "Hyperliquid info candleSnapshot (public market data) via hl-backtest/collect.py",
+           "venue": VENUE, "market_type": MARKET_TYPE, "market": "%s-PERP" % coin,
            "symbol": coin, "interval": interval, "as_of": as_of, "as_of_utc": iso(as_of),
            "first_utc": iso(rows[0][0]), "last_utc": iso(rows[-1][0]), "closed_candles": len(rows),
            "gaps": [{"from_utc": iso(t), "minutes": m} for t, m in gaps], "failed_fetches_logged": failed,
            "model_notes": MODEL_NOTES,
            "candles": [{"t": t, "T": ct, "s": coin, "i": interval, "o": o, "h": h, "l": l, "c": c, "v": v, "n": n}
                        for t, ct, o, h, l, c, v, n in rows]}
-    if meta:
-        doc["exchange_meta"] = meta
+    doc["exchange_meta"] = meta
     return doc
 
 
@@ -449,8 +463,8 @@ def cmd_export(a, db, post):
                                                                        doc["last_utc"], doc["as_of_utc"]))
     print("Datenlücken: %d (%d fehlende Minuten); fehlgeschlagene Abrufe im Log: %d"
           % (len(doc["gaps"]), sum(g["minutes"] for g in doc["gaps"]), doc["failed_fetches_logged"]))
-    if "exchange_meta" not in doc:
-        print("Hinweis: kein meta im Bestand, szDecimals fehlt im Export (collect.py meta ausführen)")
+    print("Markt: %s:%s (Perps-Universum laut meta, szDecimals %s)"
+          % (doc["venue"], doc["market"], doc["exchange_meta"]["szDecimals"]))
     return 0
 
 
@@ -482,7 +496,7 @@ def main(argv=None, post=http_post):
             raise CollectError("--lookback-minutes is 1 to %d" % SERVED)
         if a.cmd == "fetch" and a.overlap_minutes < 1:
             raise CollectError("--overlap-minutes must be at least 1")
-        a.coin = a.coin.upper()
+        a.coin = perp_coin(a.coin)
         path = outside_checkout(a.db, "the database")
         d = os.path.dirname(path)
         if d:
