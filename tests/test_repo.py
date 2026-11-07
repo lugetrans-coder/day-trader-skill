@@ -15,6 +15,8 @@ ABOUT = ("11 Claude skills for day trading: scan thousands of charts, track brea
 ORDER_PATH = ["trader-scanner", "trader-entry", "trader-exit", "trader-timemachine", "trader-budget",
               "trader-pelosi", "trader-risk", "trader-broker", "trader-alerts"]
 V1_ONLY = ["trader-copycat", "trader-screener", "trader-tax", "trader-rebalance"]
+# research tools at the root that are not skills (no SKILL.md, not on the path to an order)
+TOOLS = ["hl-backtest"]
 
 
 def frontmatter(path):
@@ -40,7 +42,11 @@ class Repo(unittest.TestCase):
 
     def test_root_matches_the_reel(self):
         root = sorted(d for d in os.listdir(ROOT) if not d.startswith(".git"))
-        self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "README.md", "tests"] + SKILLS))
+        self.assertEqual(root, sorted([".claude-plugin", "LICENSE", "README.md", "tests"] + SKILLS + TOOLS))
+
+    def test_tools_are_not_skills(self):
+        for t in TOOLS:
+            self.assertFalse(os.path.exists(os.path.join(ROOT, t, "SKILL.md")), t)
 
     def test_frontmatter_name_and_description(self):
         for s in SKILLS:
@@ -102,7 +108,7 @@ class Repo(unittest.TestCase):
 
     def test_every_tool_runs_on_python_3_8(self):
         # no 3.9+ only modules or syntax in the tools (the README promises 3.8)
-        for s in SKILLS:
+        for s in SKILLS + TOOLS:
             folder = os.path.join(ROOT, s)
             for f in os.listdir(folder):
                 if not f.endswith(".py"):
